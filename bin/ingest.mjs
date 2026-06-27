@@ -1,8 +1,9 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { fetchSnapshot } from '../src/nse.js';
 import { computeIngest } from '../src/ingest.js';
 import { loadState, serializeState } from '../src/state.js';
-import { encodeNdjsonGz, decodeNdjsonGz, sha256, buildManifest } from '../src/artifact.js';
+import { encodeNdjsonGz, decodeNdjsonGz, sha256, buildManifest, dedupeEvents } from '../src/artifact.js';
+import { writeFileAtomic } from '../src/fsutil.js';
 
 const readMaybe = async (path) => { try { return await readFile(path); } catch { return null; } };
 
@@ -31,16 +32,16 @@ async function main() {
   // Append new events to the existing full log.
   const fullBuf = await readMaybe('data/full.ndjson.gz');
   const existing = fullBuf ? decodeNdjsonGz(fullBuf) : [];
-  const merged = existing.concat(res.events);
+  const merged = dedupeEvents(existing.concat(res.events));
   const newFullBuf = encodeNdjsonGz(merged);
-  await writeFile('data/full.ndjson.gz', newFullBuf);
+  await writeFileAtomic('data/full.ndjson.gz', newFullBuf);
 
   const commit = process.env.GITHUB_SHA ?? 'local';
   const deltas = prevManifest.deltas ?? [];
   if (res.events.length > 0) {
     const deltaBuf = encodeNdjsonGz(res.events);
     const deltaPath = `deltas/${compact}.ndjson.gz`;
-    await writeFile(`data/${deltaPath}`, deltaBuf);
+    await writeFileAtomic(`data/${deltaPath}`, deltaBuf);
     deltas.push({ date: res.dateStr, path: deltaPath, sha256: sha256(deltaBuf), commit });
   }
 
@@ -50,8 +51,8 @@ async function main() {
     full: { path: 'full.ndjson.gz', sha256: sha256(newFullBuf), commit },
     deltas,
   });
-  await writeFile('data/manifest.json', JSON.stringify(manifest, null, 2));
-  await writeFile('data/state.json', serializeState({ lastDate: res.dateStr, snapshot: res.snapshot }));
+  await writeFileAtomic('data/manifest.json', JSON.stringify(manifest, null, 2));
+  await writeFileAtomic('data/state.json', serializeState({ lastDate: res.dateStr, snapshot: res.snapshot }));
   console.log(`Ingested ${res.dateStr}: ${res.events.length} change events.`);
 }
 

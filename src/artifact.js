@@ -15,6 +15,12 @@ export function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
+export function dedupeEvents(events) {
+  const byKey = new Map();
+  for (const e of events) byKey.set(`${e.sym}|${e.exch}|${e.date}`, e);
+  return [...byKey.values()];
+}
+
 export function buildManifest({ windowStart, latestDate, full, deltas }) {
   return {
     schemaVersion: 1,

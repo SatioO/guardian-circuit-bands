@@ -1,6 +1,9 @@
 name: backfill
 on:
   workflow_dispatch:
+concurrency:
+  group: data-pipeline
+  cancel-in-progress: false
 permissions:
   contents: write
 jobs:
