@@ -1,0 +1,15 @@
+{
+  "name": "traderview-circuit-bands",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test",
+    "backfill": "node bin/backfill.mjs",
+    "ingest": "node bin/ingest.mjs"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.6"
+  }
+}
