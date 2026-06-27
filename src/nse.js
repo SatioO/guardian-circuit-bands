@@ -33,3 +33,21 @@ export function toSnapshot(rows) {
   }
   return map;
 }
+
+export class FileNotAvailable extends Error {}
+
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
+
+export async function defaultFetchText(url) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA, 'Referer': 'https://www.nseindia.com/' },
+  });
+  if (res.status === 404) throw new FileNotAvailable(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return await res.text();
+}
+
+export async function fetchSnapshot(date, { fetchText = defaultFetchText } = {}) {
+  const text = await fetchText(bandFileUrl(date));
+  return toSnapshot(parseSecList(text));
+}
