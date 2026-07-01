@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-06-30T15:05:07.230Z",
+  "generatedAt": "2026-07-01T15:16:59.191Z",
   "windowStart": "2023-06-27",
-  "latestDate": "2026-06-30",
+  "latestDate": "2026-07-01",
   "full": {
     "path": "full.ndjson.gz",
-    "sha256": "b2e86cdeecaf5087c0ba742ad638c8c31ad5705509bf14b714028b3ba61431b6",
-    "commit": "3f94c3a8525614f36a0ff3345b5860fea6a25bc5"
+    "sha256": "ef87c6d257eac9b7d6ba571c38ad8e55433f1f288ece5796233fe39b8a7492fb",
+    "commit": "50f2aed2ec037e8f8eed05810460807f1592cd1b"
   },
   "deltas": [
     {
@@ -20,6 +20,12 @@
       "path": "deltas/20260630.ndjson.gz",
       "sha256": "1cf64194c83e79290894623fb7d78e2d0899c5d09f034b384439e49edabb7232",
       "commit": "3f94c3a8525614f36a0ff3345b5860fea6a25bc5"
+    },
+    {
+      "date": "2026-07-01",
+      "path": "deltas/20260701.ndjson.gz",
+      "sha256": "7d9c2449f58b098539a78bfed9332ccc4e21299a138a303b03f778efbbeee375",
+      "commit": "50f2aed2ec037e8f8eed05810460807f1592cd1b"
     }
   ]
 }
