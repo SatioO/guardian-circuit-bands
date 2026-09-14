@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-11T16:37:12.913Z",
+  "generatedAt": "2026-09-14T18:06:13.414Z",
   "windowStart": "2023-06-27",
-  "latestDate": "2026-09-11",
+  "latestDate": "2026-09-14",
   "full": {
     "path": "full.ndjson.gz",
     "sha256": "f186065866030c2469299c8fcef0f96eb667c3e892c0995928595cd072e355a0",
-    "commit": "6bff005fb09ddfd8de6cd0c718cedb56c1d071c0"
+    "commit": "ab9c20d899800592f8386a265e5bcbce7e3f1929"
   },
   "deltas": [
     {
