@@ -34,6 +34,12 @@ NSE applies `sec_list_<D>` from the next market session, so `D`'s changes are da
 - The daily ingest reads the dated `sec_list_<D>` of each session after the last file, never the undated `sec_list.csv`. Until the next session is seen, `D`'s changes are dated with the next weekday; the run that sees it re-dates them (a holiday moves them later, a weekend special session earlier).
 - A session whose file is not posted yet (within 3 days) waits for the next run.
 
+## Fetching
+
+- A body cut short is never parsed: shorter or longer than its weak ETag (`W/"<length>-<mtime>"`) says, or not ending in a line break (a file cut mid-row).
+- A file that moves more than 600 banded names to no band at once is suspect.
+- Either is fetched again past the cache (`?r=<attempt>-<ms>`, `Cache-Control`/`Pragma: no-cache`), up to 12 times over about 9 minutes; still wrong, the run fails and writes nothing. Some NSE origins still serve an old partial upload of a few files (sec_list_18052024, sec_list_04072024), in stretches of minutes.
+
 ## Run locally
 
 ```bash

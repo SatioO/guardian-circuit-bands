@@ -1,5 +1,5 @@
 import { addDays, daysApart, isWeekday, nextWeekday, parseYmd } from './dates.js';
-import { FileNotAvailable } from './nse.js';
+import { FileNotAvailable, REFETCH_BACKOFF_MS } from './nse.js';
 import { baselineEvents, collapseEvents, diffSnapshots } from './diff.js';
 import { rekeyEvents, rekeySnapshot, renameIndex } from './renames.js';
 
@@ -26,8 +26,10 @@ import { rekeyEvents, rekeySnapshot, renameIndex } from './renames.js';
  *   has never closed that long; an archive that stops answering would look
  *   like it. Any other failed request fails the walk.
  * - A file that moves more than `maxMovesToNoBand` banded names to no band at
- *   once is fetched again up to `refetches` times, then fails the walk
- *   (`SuspectFile`, nothing written), each attempt logged with what was sent.
+ *   once is fetched again past the cache (`{ refetch }`), waiting
+ *   `REFETCH_BACKOFF_MS` before each, up to `refetches` times; then it fails
+ *   the walk (`SuspectFile`, nothing written). Each attempt is logged with
+ *   what was fetched. A file cut short never gets here: `fetchWhole` re-fetches it.
  * - It assumes NSE posts its archive in date order: a recent weekday with
  *   neither file, once a later session is found, was a holiday, and the walk
  *   moves past it for good. A later session's bhavcopy is never posted before
@@ -60,7 +62,7 @@ function diagnosis(day, raw, moves, attempt) {
   const nullBands = [...raw.values()].filter((r) => r.band == null).length;
   return JSON.stringify({
     file: day, attempt, movesToNoBand: moves, url: s.url, bytes: s.bytes, rows: s.rows,
-    symbols: raw.size, nullBands, contentType: s.contentType, head: s.head,
+    symbols: raw.size, nullBands, contentType: s.contentType, etag: s.etag, lastModified: s.lastModified, head: s.head,
   });
 }
 
@@ -77,7 +79,7 @@ export async function walk({
   recentDays = 3,
   maxQuietWeekdays = 4,
   maxMovesToNoBand = MAX_MOVES_TO_NO_BAND,
-  refetches = 2,
+  refetches = REFETCH_BACKOFF_MS.length,
   log = () => {},
 }) {
   const index = renameIndex(renames);
@@ -88,7 +90,7 @@ export async function walk({
   const pause = async () => { if (throttleMs) await sleep(throttleMs); };
   const listed = async (day) => {
     try {
-      await fetchSnapshot(parseYmd(day));
+      await fetchSnapshot(parseYmd(day), { sleep });
       return true;
     } catch (err) {
       if (err instanceof FileNotAvailable) return false;
@@ -118,7 +120,7 @@ export async function walk({
     pending = [];
     let raw;
     try {
-      raw = await fetchSnapshot(parseYmd(day));
+      raw = await fetchSnapshot(parseYmd(day), { sleep });
     } catch (err) {
       if (!(err instanceof FileNotAvailable)) throw err;
       if (daysApart(day, today) <= recentDays) break;
@@ -135,7 +137,8 @@ export async function walk({
       if (attempt > refetches) {
         throw new SuspectFile(`sec_list ${day} moves ${moves} banded names to no band (> ${maxMovesToNoBand}) on ${attempt} fetches: ${why}`);
       }
-      raw = await fetchSnapshot(parseYmd(day));
+      await sleep(REFETCH_BACKOFF_MS[Math.min(attempt, REFETCH_BACKOFF_MS.length) - 1]);
+      raw = await fetchSnapshot(parseYmd(day), { refetch: attempt, sleep });
       await pause();
       next = rekeySnapshot(raw, day, index);
     }
