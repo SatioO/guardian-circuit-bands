@@ -26,6 +26,7 @@ async function publish(dir, { events, lastPub, snapshot, windowStart, commit }) 
 
 /** The whole log from `from` to `today`, replacing `dir`'s. */
 export async function backfillInto(dir, { from, today, fetchers, commit = 'local', sleep, throttleMs, log = () => {} }) {
+  log(`Backfilling ${from} .. ${today} into ${dir}/`);
   const renames = await fetchers.symbolChanges();
   const res = await runBackfill({
     fetchSnapshot: fetchers.snapshot,
@@ -37,9 +38,10 @@ export async function backfillInto(dir, { from, today, fetchers, commit = 'local
     throttleMs,
   });
   await mkdir(dir, { recursive: true });
-  // Schema 1's per-day deltas carry file dates; schema 2 publishes the full log only.
-  await rm(join(dir, 'deltas'), { recursive: true, force: true });
   await publish(dir, { ...res, windowStart: from, commit });
+  // Schema 1's per-day deltas carry file dates; schema 2 publishes the full
+  // log only. Removed only once the new log is written.
+  await rm(join(dir, 'deltas'), { recursive: true, force: true });
   log(`Backfilled ${from} .. ${today}: ${res.events.length} events (${renames.length} renames); last file ${res.lastPub}`);
   return res;
 }

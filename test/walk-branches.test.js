@@ -67,16 +67,73 @@ test('fail closed: a weekday sec_list with no bhavcopy', async () => {
   assert.equal(res.lastPub, '2026-10-07');
 });
 
+test('scattered weekday holidays never add up (the count restarts at each session)', async () => {
+  // Five weekday holidays over three weeks, each followed by a session; a real
+  // window holds about 45. The files are sec_list_05102026's rows, re-used.
+  const holidays = ['2026-10-06', '2026-10-08', '2026-10-13', '2026-10-15', '2026-10-20'];
+  const weekday = (day) => ![0, 6].includes(new Date(`${day}T00:00:00Z`).getUTCDay());
+  const sessions = async (date) => weekday(ymd(date)) && !holidays.includes(ymd(date));
+  const files = async (date) => {
+    if (!(await sessions(date))) throw new FileNotAvailable(ymd(date));
+    return fetchSnapshot(new Date('2026-10-05T00:00:00Z'));
+  };
+  // By 10-30 all five are older than recentDays, so all five count.
+  const res = await runBackfill({ fetchSnapshot: files, sessionExists: sessions, renames, from: '2026-10-04', today: '2026-10-30' });
+  assert.equal(res.lastPub, '2026-10-30');
+});
+
+// No bhavcopy and no sec_list from `from` through `to` (a closure, or a dark archive).
+const closed = (from, to = '9999-12-31') => {
+  const shut = (date) => ymd(date) >= from && ymd(date) <= to;
+  return {
+    sessionExists: async (date) => (shut(date) ? false : sessionExists(date)),
+    fetchSnapshot: async (date) => {
+      if (shut(date)) throw new FileNotAvailable(ymd(date));
+      return fetchSnapshot(date);
+    },
+  };
+};
+
 test('fail closed: more than 4 weekdays in a row without a bhavcopy', async () => {
-  const dark = (from) => async (date) => (ymd(date) >= from ? false : sessionExists(date));
-  const none = async () => { throw new FileNotAvailable('none'); };
-  const files = async (date) => (ymd(date) >= '2026-10-06' ? none() : fetchSnapshot(date));
-  // 10-06 … 10-12: five weekdays (06, 07, 08, 09, 12) with neither a bhavcopy nor a file.
+  // Dark from 10-06: by 10-16, five weekdays older than recentDays (06, 07, 08, 09, 12).
   await assert.rejects(
-    runBackfill({ fetchSnapshot: files, sessionExists: dark('2026-10-06'), renames, from: '2026-10-04', today: '2026-10-13' }),
-    (err) => err instanceof SessionCheckFailed && /5 weekdays in a row/.test(err.message),
+    runBackfill({ ...closed('2026-10-06'), renames, from: '2026-10-04', today: '2026-10-16' }),
+    (err) => err instanceof SessionCheckFailed && /5 weekdays in a row without a bhavcopy, through 2026-10-12/.test(err.message),
   );
-  // Four (06 … 09) are allowed: the weekend does not count.
-  const four = await runBackfill({ fetchSnapshot: files, sessionExists: dark('2026-10-06'), renames, from: '2026-10-04', today: '2026-10-11' });
-  assert.equal(four.lastPub, '2026-10-05');
+});
+
+test('a 4-weekday closure plus a recent day not posted yet is no failure', async () => {
+  // 06 … 09 closed; at 10-13, 10-12 and 10-13 are within recentDays and may just be late.
+  const res = await runBackfill({ ...closed('2026-10-06'), renames, from: '2026-10-04', today: '2026-10-13' });
+  assert.equal(res.lastPub, '2026-10-05');
+});
+
+test('a weekend inside a closure does not count', async () => {
+  // 06 … 09 closed, then the weekend, then sessions again on 10-12.
+  const res = await runBackfill({ ...closed('2026-10-06', '2026-10-11'), renames, from: '2026-10-04', today: '2026-10-14' });
+  assert.equal(res.lastPub, '2026-10-13');
+});
+
+test('recentDays on a sec_list without a bhavcopy: 3 days back waits, 4 days back fails', async () => {
+  const hidden = async (date) => (ymd(date) === '2026-10-08' ? false : sessionExists(date));
+  const at = (today) => runBackfill({ fetchSnapshot, sessionExists: hidden, renames, from: '2026-10-04', today });
+  assert.equal((await at('2026-10-11')).lastPub, '2026-10-07');
+  await assert.rejects(at('2026-10-12'), SessionCheckFailed);
+});
+
+test('a failed sec_list request fails the walk, on a holiday and on a session', async () => {
+  const failing = (day) => async (date) => {
+    if (ymd(date) === day) throw new Error(`HTTP 503 for sec_list ${day}`);
+    return fetchSnapshot(date);
+  };
+  // 10-10 is a Saturday, so take a weekday with no bhavcopy: 10-08, hidden.
+  const hidden = async (date) => (ymd(date) === '2026-10-08' ? false : sessionExists(date));
+  await assert.rejects(
+    runBackfill({ fetchSnapshot: failing('2026-10-08'), sessionExists: hidden, renames, from: '2026-10-04', today: '2026-10-13' }),
+    /HTTP 503 for sec_list 2026-10-08/,
+  );
+  await assert.rejects(
+    runBackfill({ fetchSnapshot: failing('2026-10-09'), sessionExists, renames, from: '2026-10-04', today: '2026-10-13' }),
+    /HTTP 503 for sec_list 2026-10-09/,
+  );
 });

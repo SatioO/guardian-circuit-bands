@@ -38,9 +38,27 @@ test('ingest refuses a schema-1 folder and writes nothing', async () => {
   assert.equal(await readFile(join(dir, 'manifest.json'), 'utf8'), manifest);
 });
 
-test('a failing fetch writes nothing', async () => {
+test('a failing fetch writes nothing and keeps the old deltas', async () => {
   const dir = await folder();
+  await mkdir(join(dir, 'deltas'));
+  await writeFile(join(dir, 'deltas', '20261016.ndjson.gz'), 'old');
   const broken = { ...fixtureFetchers, sessionExists: async () => { throw new Error('HTTP 403'); } };
-  await assert.rejects(backfillInto(join(dir, 'data'), { from: '2026-10-04', today: '2026-10-06', fetchers: broken }), /HTTP 403/);
+  await assert.rejects(backfillInto(dir, { from: '2026-10-04', today: '2026-10-06', fetchers: broken }), /HTTP 403/);
+  assert.deepEqual(await readdir(dir), ['deltas']);
+  assert.deepEqual(await readdir(join(dir, 'deltas')), ['20261016.ndjson.gz']);
+});
+
+test('a failed sec_list request in a run writes nothing', async () => {
+  const dir = await folder();
+  const broken = { ...fixtureFetchers, snapshot: async () => { throw new Error('HTTP 503'); } };
+  await assert.rejects(backfillInto(dir, { from: '2026-10-04', today: '2026-10-06', fetchers: broken }), /HTTP 503/);
   assert.deepEqual(await readdir(dir), []);
+});
+
+test('the backfill says where it starts before it fetches', async () => {
+  const lines = [];
+  const quiet = { ...fixtureFetchers, symbolChanges: async () => { lines.push('fetching'); return []; } };
+  await backfillInto(await folder(), { from: '2026-10-04', today: '2026-10-06', fetchers: quiet, log: (l) => lines.push(l) });
+  assert.match(lines[0], /^Backfilling 2026-10-04 \.\. 2026-10-06 into /);
+  assert.equal(lines[1], 'fetching');
 });
