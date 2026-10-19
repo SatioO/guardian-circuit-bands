@@ -29,6 +29,9 @@ export const fetchSnapshot = async (date) => {
 
 export const renames = parseSymbolChanges(readFileSync(new URL('symbolchange.csv', here), 'utf8'));
 
+/** The fixtures as the CLI's fetchers. */
+export const fixtureFetchers = { snapshot: fetchSnapshot, sessionExists, symbolChanges: async () => renames };
+
 /** The band a reader sees on `day`: the symbol's latest event dated on or before it. */
 export function bandOn(events, sym, day) {
   const mine = events.filter((e) => e.sym === sym && e.date <= day).sort((a, b) => a.date.localeCompare(b.date));

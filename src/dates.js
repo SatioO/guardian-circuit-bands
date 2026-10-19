@@ -30,10 +30,14 @@ export function daysApart(from, to) {
   return Math.round((parseYmd(to).getTime() - parseYmd(from).getTime()) / DAY_MS);
 }
 
+export function isWeekday(day) {
+  return ![0, 6].includes(parseYmd(day).getUTCDay());
+}
+
 /** The first Monday–Friday after `day`: a file's changes take effect then until the next session is known. */
 export function nextWeekday(day) {
   let next = addDays(day, 1);
-  while ([0, 6].includes(parseYmd(next).getUTCDay())) next = addDays(next, 1);
+  while (!isWeekday(next)) next = addDays(next, 1);
   return next;
 }
 

@@ -1,4 +1,4 @@
-import { addDays, daysApart, nextWeekday, parseYmd } from './dates.js';
+import { addDays, daysApart, isWeekday, nextWeekday, parseYmd } from './dates.js';
 import { FileNotAvailable } from './nse.js';
 import { baselineEvents, collapseEvents, diffSnapshots } from './diff.js';
 import { rekeyEvents, rekeySnapshot, renameIndex } from './renames.js';
@@ -18,7 +18,14 @@ import { rekeyEvents, rekeySnapshot, renameIndex } from './renames.js';
  * - A session whose file is not posted yet, within `recentDays` of `today`,
  *   ends the walk; the next walk reads it. An older one never comes and is
  *   skipped, its band staying in force.
+ * - The session test fails closed (`SessionCheckFailed`, nothing written): a
+ *   weekday with a `sec_list` but no bhavcopy (a bhavcopy not posted yet
+ *   within `recentDays` ends the walk instead), and more than
+ *   `maxQuietWeekdays` weekdays in a row without one. NSE has never closed
+ *   that long; an archive that stops answering would look like it.
  */
+export class SessionCheckFailed extends Error {}
+
 export async function walk({
   fetchSnapshot,
   sessionExists,
@@ -30,6 +37,7 @@ export async function walk({
   sleep = async () => {},
   throttleMs = 0,
   recentDays = 3,
+  maxQuietWeekdays = 4,
 }) {
   const index = renameIndex(renames);
   const out = rekeyEvents(events, index);
@@ -37,10 +45,34 @@ export async function walk({
   let pending = out.filter((e) => e.pub === lastPub);
   let added = 0;
   const pause = async () => { if (throttleMs) await sleep(throttleMs); };
+  const listed = async (day) => {
+    try {
+      await fetchSnapshot(parseYmd(day));
+      return true;
+    } catch (err) {
+      if (err instanceof FileNotAvailable) return false;
+      throw err;
+    } finally {
+      await pause();
+    }
+  };
+  let quiet = 0;
   for (let day = addDays(lastPub, 1); day <= today; day = addDays(day, 1)) {
     const session = await sessionExists(parseYmd(day));
     await pause();
-    if (!session) continue;
+    if (!session) {
+      if (!isWeekday(day)) continue;
+      quiet += 1;
+      if (quiet > maxQuietWeekdays) {
+        throw new SessionCheckFailed(`${quiet} weekdays in a row without a bhavcopy, through ${day}`);
+      }
+      if (await listed(day)) {
+        if (daysApart(day, today) <= recentDays) break;
+        throw new SessionCheckFailed(`${day}: NSE published a sec_list but no bhavcopy`);
+      }
+      continue;
+    }
+    quiet = 0;
     for (const e of pending) e.date = day;
     pending = [];
     let raw;

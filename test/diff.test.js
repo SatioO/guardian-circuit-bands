@@ -32,6 +32,16 @@ test('a listing, leaving the list and a move to No Band are band changes with a 
   ]);
 });
 
+test('an empty remark is the normal "-" (an old-format row)', async () => {
+  const { parseSecList, toSnapshot } = await import('../src/nse.js');
+  const text = `Symbol,Series,Security Name,Band,Remarks
+A,EQ,A LIMITED,5,""
+`;
+  const next = toSnapshot(parseSecList(text));
+  assert.deepEqual(diffSnapshots(new Map([['A', sym(5, '-')]]), next, D, P), []);
+  assert.equal(baselineEvents(next, D, P)[0].nrem, '-');
+});
+
 test('No Band to No Band is no change', () => {
   assert.deepEqual(diffSnapshots(new Map([['A', sym(null, '-')]]), new Map([['A', sym(null, '-')]]), D, P), []);
 });
