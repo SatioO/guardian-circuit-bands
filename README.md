@@ -40,6 +40,13 @@ NSE applies `sec_list_<D>` from the next market session, so `D`'s changes are da
 - A file that moves more than 600 banded names to no band at once is suspect.
 - Either is fetched again past the cache (`?r=<attempt>-<ms>`, `Cache-Control`/`Pragma: no-cache`), up to 12 times over about 9 minutes; still wrong, the run fails and writes nothing. Some NSE origins still serve an old partial upload of a few files (sec_list_18052024, sec_list_04072024), in stretches of minutes.
 
+### Pinned files
+
+`pinned/` holds verified whole copies of `sec_list_18052024.csv` and `sec_list_04072024.csv`, byte for byte as NSE serves them whole, with each URL, ETag, length and sha256 in `pinned/manifest.json`. A pinned URL is read from its pin and never fetched; a pin whose bytes don't match its ETag's length and the manifest's length and sha256 fails the run, with no fallback to the network.
+
+- **Why these two:** some NSE origins still serve an older 32,768-byte partial upload of them, cut mid-row: `W/"32768-1716028805625"` and `W/"32768-1720098911000"`, beside the whole `W/"121533-1716028831000"` and `W/"119269-1720099203000"` (scanned 2026-10-19, all 821 session files of the window). From GitHub's runners every request reached the partial: backfill run 39199676294 got it on 3 fetches, run 39205076629 on 13 busted fetches over about 9 minutes.
+- **Only ever a past file:** a past date's archive file never changes, so a verified whole copy is the truth for it. Never pin a file that NSE may still post or replace.
+
 ## Run locally
 
 ```bash

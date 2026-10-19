@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { ddmmyyyy, ymd } from './dates.js';
 import { parse } from 'csv-parse/sync';
 
@@ -145,10 +148,45 @@ export function cutShort(body) {
   return null;
 }
 
+export class PinMismatch extends Error {}
+
+const PINNED = new URL('../pinned/', import.meta.url);
+
 /**
- * A whole file. A body cut short (`cutShort`) is never parsed but fetched
- * again past the cache, waiting `REFETCH_BACKOFF_MS` before each re-fetch,
- * then `TruncatedFile`. `refetch` > 0 busts from the first fetch (the walk
+ * The pinned files of a folder's `manifest.json`, by URL: verified whole
+ * copies of past files that some NSE origins serve only as a partial upload
+ * (see README). A past date's archive file never changes, so its pin is the
+ * truth; nothing else is ever pinned.
+ */
+export function loadPins(dir = PINNED) {
+  const base = dir instanceof URL ? dir : pathToFileURL(`${dir}/`);
+  const { files } = JSON.parse(readFileSync(new URL('manifest.json', base), 'utf8'));
+  return new Map(files.map((f) => [f.url, { ...f, path: new URL(f.file, base) }]));
+}
+
+let defaultPins;
+const repoPins = () => (defaultPins ??= loadPins());
+
+/**
+ * A pinned file's body, after checking its bytes: the length its ETag claims
+ * and the manifest's, and the manifest's sha256. A mismatch throws
+ * (`PinMismatch`); it never falls back to the network.
+ */
+export function readPin(pin) {
+  const bytes = readFileSync(pin.path);
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const claimed = etagLength(pin.etag);
+  if (bytes.length !== claimed || bytes.length !== pin.bytes || sha256 !== pin.sha256) {
+    throw new PinMismatch(`pinned ${pin.url} is ${bytes.length} bytes, sha256 ${sha256}; its ETag ${pin.etag} claims ${claimed}, the manifest ${pin.bytes} bytes, sha256 ${pin.sha256}`);
+  }
+  return { text: bytes.toString('utf8'), bytes: bytes.length, contentType: 'text/csv', etag: pin.etag, lastModified: null };
+}
+
+/**
+ * A whole file. A pinned URL (`pins`, by default the repo's `pinned/`) is
+ * read from its pin, checked, and never fetched. A body cut short
+ * (`cutShort`) is never parsed but fetched again past the cache, waiting
+ * `REFETCH_BACKOFF_MS` before each re-fetch, then `TruncatedFile`. `refetch` > 0 busts from the first fetch (the walk
  * re-fetching a suspect file).
  *
  * Past the cache NSE's origins answer from more than one copy. Two files of
@@ -160,7 +198,13 @@ export function cutShort(body) {
  * suspect-file check. Copies of one length with other mtimes are
  * byte-identical re-uploads.
  */
-export async function fetchWhole(url, { fetchBody = defaultFetchBody, refetch = 0, retries = REFETCH_BACKOFF_MS.length, sleep = realSleep, log = console.warn } = {}) {
+export async function fetchWhole(url, { fetchBody = defaultFetchBody, refetch = 0, retries = REFETCH_BACKOFF_MS.length, sleep = realSleep, pins = repoPins(), log = console.warn } = {}) {
+  const pin = pins.get(url);
+  if (pin) {
+    const body = readPin(pin);
+    log(`pinned file: ${JSON.stringify({ url, etag: pin.etag, bytes: pin.bytes, sha256: pin.sha256 })}`);
+    return { ...body, url };
+  }
   let attempt = refetch;
   for (let tries = 0; ; tries += 1) {
     if (tries > 0) await sleep(REFETCH_BACKOFF_MS[Math.min(tries, REFETCH_BACKOFF_MS.length) - 1]);
@@ -190,11 +234,11 @@ export async function defaultFetchStatus(url) {
  * A dated `sec_list` as a snapshot. It carries, not enumerable, what was
  * fetched (`source`): the walk logs it when a file looks wrong.
  */
-export async function fetchSnapshot(date, { fetchText, fetchBody = defaultFetchBody, refetch = 0, sleep, log } = {}) {
+export async function fetchSnapshot(date, { fetchText, fetchBody = defaultFetchBody, refetch = 0, sleep, pins, log } = {}) {
   const url = bandFileUrl(date);
   const { text, contentType = null, etag = null, lastModified = null, url: fetched = url } = fetchText
     ? { text: await fetchText(url) }
-    : await fetchWhole(url, { fetchBody, refetch, sleep, log });
+    : await fetchWhole(url, { fetchBody, refetch, sleep, pins, log });
   const rows = parseSecList(text);
   const snapshot = toSnapshot(rows);
   Object.defineProperty(snapshot, 'source', {
