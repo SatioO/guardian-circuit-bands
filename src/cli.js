@@ -36,6 +36,7 @@ export async function backfillInto(dir, { from, today, fetchers, commit = 'local
     today,
     sleep,
     throttleMs,
+    log,
   });
   await mkdir(dir, { recursive: true });
   await publish(dir, { ...res, windowStart: from, commit });
@@ -64,6 +65,7 @@ export async function ingestInto(dir, { today, fetchers, commit = 'local', sleep
     today,
     sleep,
     throttleMs,
+    log,
   });
   const newFull = encodeNdjsonGz(sortEvents(res.events));
   const newState = serializeState({ schemaVersion: SCHEMA_VERSION, lastPub: res.lastPub, snapshot: res.snapshot });

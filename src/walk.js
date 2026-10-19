@@ -25,12 +25,44 @@ import { rekeyEvents, rekeySnapshot, renameIndex } from './renames.js';
  *   older than `recentDays` (a recent one may just not be posted yet). NSE
  *   has never closed that long; an archive that stops answering would look
  *   like it. Any other failed request fails the walk.
+ * - A file that moves more than `maxMovesToNoBand` banded names to no band at
+ *   once is fetched again up to `refetches` times, then fails the walk
+ *   (`SuspectFile`, nothing written), each attempt logged with what was sent.
  * - It assumes NSE posts its archive in date order: a recent weekday with
  *   neither file, once a later session is found, was a holiday, and the walk
  *   moves past it for good. A later session's bhavcopy is never posted before
  *   an earlier day's.
  */
 export class SessionCheckFailed extends Error {}
+
+/**
+ * A file that moves more banded names to no band (No Band, or off the list)
+ * than any real file does. Over 2023-06-27 … 2026-10-16 the most was 331
+ * (sec_list_04092026, NSE removing ETF bands), then 185 and 184 (the 2024 DR
+ * Saturdays); the median file moves 2. A bad body the backfill run took for
+ * sec_list_04072024 moved 1,647, of about 2,400 banded. 600 is ~1.8× the
+ * largest real move and a quarter of the banded universe: a real mass change
+ * that big fails closed, loudly, for a person to look at.
+ */
+export const MAX_MOVES_TO_NO_BAND = 600;
+
+export class SuspectFile extends Error {}
+
+const movesToNoBand = (prev, next) => {
+  let n = 0;
+  for (const [sym, row] of prev) if (row.band != null && (next.get(sym)?.band ?? null) === null) n += 1;
+  return n;
+};
+
+/** What a suspect file was, for the runner's log: what NSE sent. */
+function diagnosis(day, raw, moves, attempt) {
+  const s = raw.source ?? {};
+  const nullBands = [...raw.values()].filter((r) => r.band == null).length;
+  return JSON.stringify({
+    file: day, attempt, movesToNoBand: moves, url: s.url, bytes: s.bytes, rows: s.rows,
+    symbols: raw.size, nullBands, contentType: s.contentType, head: s.head,
+  });
+}
 
 export async function walk({
   fetchSnapshot,
@@ -44,6 +76,9 @@ export async function walk({
   throttleMs = 0,
   recentDays = 3,
   maxQuietWeekdays = 4,
+  maxMovesToNoBand = MAX_MOVES_TO_NO_BAND,
+  refetches = 2,
+  log = () => {},
 }) {
   const index = renameIndex(renames);
   const out = rekeyEvents(events, index);
@@ -90,7 +125,20 @@ export async function walk({
       continue;
     }
     await pause();
-    const next = rekeySnapshot(raw, day, index);
+    let next = rekeySnapshot(raw, day, index);
+    // A suspect file is fetched again; still suspect, the walk fails.
+    for (let attempt = 1; prev; attempt += 1) {
+      const moves = movesToNoBand(prev, next);
+      if (moves <= maxMovesToNoBand) break;
+      const why = diagnosis(day, raw, moves, attempt);
+      log(`suspect sec_list: ${why}`);
+      if (attempt > refetches) {
+        throw new SuspectFile(`sec_list ${day} moves ${moves} banded names to no band (> ${maxMovesToNoBand}) on ${attempt} fetches: ${why}`);
+      }
+      raw = await fetchSnapshot(parseYmd(day));
+      await pause();
+      next = rekeySnapshot(raw, day, index);
+    }
     const fresh = prev ? diffSnapshots(prev, next, nextWeekday(day), day) : baselineEvents(next, nextWeekday(day), day);
     out.push(...fresh);
     added += fresh.length;
