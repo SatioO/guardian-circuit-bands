@@ -1,45 +1,50 @@
-import { mkdir } from 'node:fs/promises';
-import { fetchSnapshot } from '../src/nse.js';
+import { mkdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fetchSessionExists, fetchSnapshot, fetchSymbolChanges } from '../src/nse.js';
 import { runBackfill } from '../src/backfill.js';
+import { SCHEMA_VERSION } from '../src/ingest.js';
 import { serializeState } from '../src/state.js';
 import { encodeNdjsonGz, sha256, buildManifest } from '../src/artifact.js';
+import { sortEvents } from '../src/diff.js';
 import { writeFileAtomic } from '../src/fsutil.js';
-import { ymd } from '../src/dates.js';
+import { istToday } from '../src/dates.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const YEARS = 3;
+// The published window's start; the archive's sec_list files reach back to it.
+const WINDOW_START = '2023-06-27';
+const from = process.env.BACKFILL_FROM || WINDOW_START;
+const today = process.env.BACKFILL_TO || istToday();
+const dir = process.env.BAND_DATA_DIR || 'data';
 const throttleMs = Number(process.env.BACKFILL_THROTTLE_MS) || 250;
 
 async function main() {
-  const toDate = new Date();
-  toDate.setUTCHours(0, 0, 0, 0);
-  const fromDate = new Date(toDate.getTime());
-  fromDate.setUTCFullYear(fromDate.getUTCFullYear() - YEARS);
-
-  console.log(`Backfilling ${ymd(fromDate)} .. ${ymd(toDate)}`);
-  const { events, snapshot, lastDate } = await runBackfill({
+  console.log(`Backfilling ${from} .. ${today} into ${dir}/`);
+  const renames = await fetchSymbolChanges();
+  const { events, snapshot, lastPub } = await runBackfill({
     fetchSnapshot: (date) => fetchSnapshot(date),
-    fromDate,
-    toDate,
+    sessionExists: (date) => fetchSessionExists(date),
+    renames,
+    from,
+    today,
     sleep,
     throttleMs,
   });
-  console.log(`Collected ${events.length} change events; last date ${lastDate}`);
+  console.log(`Collected ${events.length} events (${renames.length} renames); last file ${lastPub}`);
 
-  await mkdir('data/deltas', { recursive: true });
-  const fullBuf = encodeNdjsonGz(events);
-  await writeFileAtomic('data/full.ndjson.gz', fullBuf);
-
+  await mkdir(dir, { recursive: true });
+  // Schema 1's per-day deltas carry file dates; schema 2 publishes the full log only.
+  await rm(join(dir, 'deltas'), { recursive: true, force: true });
+  const fullBuf = encodeNdjsonGz(sortEvents(events));
+  await writeFileAtomic(join(dir, 'full.ndjson.gz'), fullBuf);
   const commit = process.env.GITHUB_SHA ?? 'local';
   const manifest = buildManifest({
-    windowStart: ymd(fromDate),
-    latestDate: lastDate,
+    windowStart: from,
+    latestDate: lastPub,
     full: { path: 'full.ndjson.gz', sha256: sha256(fullBuf), commit },
-    deltas: [],
   });
-  await writeFileAtomic('data/manifest.json', JSON.stringify(manifest, null, 2));
-  await writeFileAtomic('data/state.json', serializeState({ lastDate, snapshot }));
-  console.log('Wrote data/full.ndjson.gz, data/manifest.json, data/state.json');
+  await writeFileAtomic(join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  await writeFileAtomic(join(dir, 'state.json'), serializeState({ schemaVersion: SCHEMA_VERSION, lastPub, snapshot }));
+  console.log(`Wrote ${dir}/full.ndjson.gz, manifest.json, state.json`);
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });

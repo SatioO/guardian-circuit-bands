@@ -1,21 +1,17 @@
-import { ymd } from './dates.js';
-import { FileNotAvailable } from './nse.js';
-import { diffSnapshots } from './diff.js';
+import { walk } from './walk.js';
 
-export async function computeIngest({ fetchSnapshot, prevSnapshot, prevLastDate, today }) {
-  const dateStr = ymd(today);
-  if (prevLastDate && dateStr <= prevLastDate) {
-    return { dateStr, events: [], snapshot: prevSnapshot, skipped: true };
+export const SCHEMA_VERSION = 2;
+
+export class SchemaMismatch extends Error {}
+
+/**
+ * The log carried forward to `today` from the stored state and events. A
+ * schema-1 state (file-dated events, no baseline) is refused: only a
+ * backfill writes schema 2.
+ */
+export async function computeIngest({ state, history, today, ...rest }) {
+  if (state.schemaVersion !== SCHEMA_VERSION || !state.lastPub || !state.snapshot) {
+    throw new SchemaMismatch(`state is not schema ${SCHEMA_VERSION}: run the backfill first`);
   }
-  let snap;
-  try {
-    snap = await fetchSnapshot(null);
-  } catch (err) {
-    if (err instanceof FileNotAvailable) {
-      return { dateStr, events: [], snapshot: prevSnapshot, unavailable: true };
-    }
-    throw err;
-  }
-  const events = prevSnapshot.size ? diffSnapshots(prevSnapshot, snap, dateStr) : [];
-  return { dateStr, events, snapshot: snap };
+  return walk({ ...rest, lastPub: state.lastPub, snapshot: state.snapshot, events: history, today });
 }

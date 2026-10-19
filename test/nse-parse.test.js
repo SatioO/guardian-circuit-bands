@@ -22,6 +22,13 @@ test('toSnapshot keys by symbol with numeric band', () => {
   assert.equal(snap.size, 3);
 });
 
+test('toSnapshot keeps No Band (F&O names) as a null band', () => {
+  const text = `Symbol,Series,Security Name,Band,Remarks
+HDFCBANK,EQ,HDFC BANK LIMITED,No Band,"-"
+`;
+  assert.deepEqual(toSnapshot(parseSecList(text)).get('HDFCBANK'), { series: 'EQ', name: 'HDFC BANK LIMITED', band: null, remark: '-' });
+});
+
 test('toSnapshot prefers the EQ series on duplicate symbols', () => {
   const dup = `Symbol,Series,Security Name,Band,Remarks
 FOO,BE,FOO LIMITED,20,"-"
