@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "url": "https://nsearchives.nseindia.com/content/equities/sec_list_18052024.csv",
+      "file": "sec_list_18052024.csv",
+      "etag": "W/\"121533-1716028831000\"",
+      "bytes": 121533,
+      "sha256": "24b187dc9edc3cad034fde58b23b71333be650456fe9c5513e95b63b36920f3c"
+    },
+    {
+      "url": "https://nsearchives.nseindia.com/content/equities/sec_list_04072024.csv",
+      "file": "sec_list_04072024.csv",
+      "etag": "W/\"119269-1720099203000\"",
+      "bytes": 119269,
+      "sha256": "8b750e9a0337d847f2342efa7566b6aac196de3985ac2697f3f9ec4b483806dd"
+    }
+  ]
+}
