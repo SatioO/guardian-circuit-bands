@@ -63,6 +63,26 @@ test('a phantom on the first fetch and a good file on the retry passes', async (
   assert.deepEqual(events.filter((e) => e.pub === '2026-10-06'), []);
 });
 
+// A body cut short: the same file with only its first 50 of 700 rows.
+const SHORT = `${GOOD.split('\n').slice(0, 51).join('\n')}\n`;
+
+test('a body cut short (most banded rows missing) fails after two re-fetches, and a run writes nothing', async () => {
+  await assert.rejects(
+    runBackfill({ fetchSnapshot: bodies(SHORT), sessionExists: sessions, renames, from: '2026-10-05', today: '2026-10-06' }),
+    (err) => err instanceof SuspectFile && /moves 650 banded names to no band \(> 600\) on 3 fetches/.test(err.message),
+  );
+  const dir = await mkdtemp(join(tmpdir(), 'bands-short-'));
+  const fetchers = { ...fixtureFetchers, sessionExists: sessions, snapshot: bodies(SHORT) };
+  await assert.rejects(backfillInto(dir, { from: '2026-10-05', today: '2026-10-06', fetchers }), SuspectFile);
+  assert.deepEqual(await readdir(dir), []);
+});
+
+test('a body cut short, then the whole file on the re-fetch, passes', async () => {
+  const { lastPub, events } = await runBackfill({ fetchSnapshot: bodies(SHORT, GOOD), sessionExists: sessions, renames, from: '2026-10-05', today: '2026-10-06' });
+  assert.equal(lastPub, '2026-10-06');
+  assert.deepEqual(events.filter((e) => e.pub === '2026-10-06'), []);
+});
+
 test('a suspect file in a run writes nothing', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bands-suspect-'));
   const fetchers = { ...fixtureFetchers, sessionExists: sessions, snapshot: bodies(PHANTOM) };
