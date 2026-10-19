@@ -1,0 +1,64 @@
+import { addDays, daysApart, nextWeekday, parseYmd } from './dates.js';
+import { FileNotAvailable } from './nse.js';
+import { baselineEvents, collapseEvents, diffSnapshots } from './diff.js';
+import { rekeyEvents, rekeySnapshot, renameIndex } from './renames.js';
+
+/**
+ * Read NSE's dated security lists after `lastPub` up to `today`, the one
+ * walk behind both the backfill and the daily ingest.
+ *
+ * - Only a market session's file is read; a session is a day NSE published a
+ *   CM bhavcopy for (a stale Saturday `sec_list` is no session).
+ * - NSE applies `sec_list_<D>` from the next session, so D's changes are
+ *   dated with it (`date`) and keep D as `pub`. Until that session is seen
+ *   they are dated with the next weekday, and the walk that sees it re-dates
+ *   them: a holiday moves them later, a weekend special session earlier.
+ * - The first file read with no `snapshot` gives one `baseline` event per symbol.
+ * - Files and events are keyed by today's symbols (`renames`).
+ * - A session whose file is not posted yet, within `recentDays` of `today`,
+ *   ends the walk; the next walk reads it. An older one never comes and is
+ *   skipped, its band staying in force.
+ */
+export async function walk({
+  fetchSnapshot,
+  sessionExists,
+  renames = [],
+  lastPub,
+  snapshot = null,
+  events = [],
+  today,
+  sleep = async () => {},
+  throttleMs = 0,
+  recentDays = 3,
+}) {
+  const index = renameIndex(renames);
+  const out = rekeyEvents(events, index);
+  let prev = snapshot && rekeySnapshot(snapshot, lastPub, index);
+  let pending = out.filter((e) => e.pub === lastPub);
+  let added = 0;
+  const pause = async () => { if (throttleMs) await sleep(throttleMs); };
+  for (let day = addDays(lastPub, 1); day <= today; day = addDays(day, 1)) {
+    const session = await sessionExists(parseYmd(day));
+    await pause();
+    if (!session) continue;
+    for (const e of pending) e.date = day;
+    pending = [];
+    let raw;
+    try {
+      raw = await fetchSnapshot(parseYmd(day));
+    } catch (err) {
+      if (!(err instanceof FileNotAvailable)) throw err;
+      if (daysApart(day, today) <= recentDays) break;
+      continue;
+    }
+    await pause();
+    const next = rekeySnapshot(raw, day, index);
+    const fresh = prev ? diffSnapshots(prev, next, nextWeekday(day), day) : baselineEvents(next, nextWeekday(day), day);
+    out.push(...fresh);
+    added += fresh.length;
+    pending = fresh;
+    prev = next;
+    lastPub = day;
+  }
+  return { events: collapseEvents(out), snapshot: prev, lastPub, added };
+}

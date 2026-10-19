@@ -15,19 +15,19 @@ export function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
-export function dedupeEvents(events) {
-  const byKey = new Map();
-  for (const e of events) byKey.set(`${e.sym}|${e.exch}|${e.date}`, e);
-  return [...byKey.values()];
-}
-
-export function buildManifest({ windowStart, latestDate, full, deltas }) {
+/**
+ * Schema 2: `date` is the session a change takes effect, `pub` its file's
+ * date, a `baseline` event per symbol at the window start, a null band for
+ * "No Band" or a symbol off the list, symbols as named today. No deltas:
+ * every run republishes the full log (renames and re-dating touch history).
+ */
+export function buildManifest({ windowStart, latestDate, full }) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     windowStart,
     latestDate,
     full,
-    deltas,
+    deltas: [],
   };
 }
