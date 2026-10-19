@@ -83,12 +83,96 @@ export class FileNotAvailable extends Error {}
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 const HEADERS = { 'User-Agent': UA, 'Referer': 'https://www.nseindia.com/' };
 
-/** A file's text and what the server said it was. */
-export async function defaultFetchBody(url) {
-  const res = await fetch(url, { headers: HEADERS });
+/**
+ * A file's text and what the server said it was. Node's fetch has already
+ * undone any gzip (NSE serves these files gzip-encoded): `bytes` counts the
+ * file's own decoded bytes, which is what NSE's ETag length counts too
+ * (sec_list_04072024: ETag W/"119269-…", 119,269 decoded, 31,887 on the wire).
+ */
+export async function defaultFetchBody(url, { headers = {} } = {}) {
+  const res = await fetch(url, { headers: { ...HEADERS, ...headers } });
   if (res.status === 404) throw new FileNotAvailable(url);
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  return { text: await res.text(), contentType: res.headers.get('content-type') };
+  const bytes = Buffer.from(await res.arrayBuffer());
+  return {
+    text: bytes.toString('utf8'),
+    bytes: bytes.length,
+    contentType: res.headers.get('content-type'),
+    etag: res.headers.get('etag'),
+    lastModified: res.headers.get('last-modified'),
+  };
+}
+
+export class TruncatedFile extends Error {}
+
+/** The file length a weak ETag of NSE's form `W/"<length>-<mtime>"` claims, else null (no check). */
+export function etagLength(etag) {
+  const m = /^W\/"(\d+)-\d+"$/.exec(etag ?? '');
+  return m ? Number(m[1]) : null;
+}
+
+/** `url` past any cached copy: a query no edge has seen. */
+export function bustedUrl(url, attempt, now = Date.now()) {
+  return `${url}${url.includes('?') ? '&' : '?'}r=${attempt}-${now}`;
+}
+
+const NO_CACHE = { 'Cache-Control': 'no-cache', Pragma: 'no-cache' };
+
+/**
+ * The wait before each re-fetch, one per re-fetch (12, about 9 minutes). Past
+ * the cache a stale copy comes in stretches of minutes (sec_list_04072024 on
+ * 2026-10-19: 48 of 90 busted fetches over 15 minutes, 3 in 4 in the last 6),
+ * so quick retries fail together; 12 spread out all stale is about 3% in the
+ * worst stretch, and the walk then fails closed.
+ */
+export const REFETCH_BACKOFF_MS = [5, 10, 20, 30, 60, 60, 60, 60, 60, 60, 60, 60].map((s) => s * 1000);
+
+const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Why a body is not the whole file, or null: shorter or longer than its weak
+ * ETag says (`W/"<length>-<mtime>"`; no ETag, a strong one or another form:
+ * no length check), or not ending in a line break. Every sec_list of the
+ * window (824) and symbolchange.csv end in one; a file cut mid-row does not.
+ * `received` counts the decoded bytes: Node's fetch has undone the gzip, and
+ * NSE's ETag counts the decoded file (119,269 decoded, 31,887 on the wire).
+ */
+export function cutShort(body) {
+  const claimed = etagLength(body.etag);
+  const received = body.bytes ?? Buffer.byteLength(body.text);
+  if (claimed !== null && received !== claimed) return { claimed, received, why: 'length' };
+  if (!body.text.endsWith('\n')) return { claimed, received, why: 'mid-row' };
+  return null;
+}
+
+/**
+ * A whole file. A body cut short (`cutShort`) is never parsed but fetched
+ * again past the cache, waiting `REFETCH_BACKOFF_MS` before each re-fetch,
+ * then `TruncatedFile`. `refetch` > 0 busts from the first fetch (the walk
+ * re-fetching a suspect file).
+ *
+ * Past the cache NSE's origins answer from more than one copy. Two files of
+ * the window (sec_list_18052024, sec_list_04072024; 821 scanned, 6 busted
+ * fetches each, 2026-10-19) still have a partial upload on some origin: 32,768
+ * bytes, cut mid-row, older than the whole file (W/"32768-1720098911000"
+ * beside W/"119269-1720099203000"). Its ETag matches its own length, so only
+ * the mid-row check sees it; a cut landing on a row end is left to the walk's
+ * suspect-file check. Copies of one length with other mtimes are
+ * byte-identical re-uploads.
+ */
+export async function fetchWhole(url, { fetchBody = defaultFetchBody, refetch = 0, retries = REFETCH_BACKOFF_MS.length, sleep = realSleep, log = console.warn } = {}) {
+  let attempt = refetch;
+  for (let tries = 0; ; tries += 1) {
+    if (tries > 0) await sleep(REFETCH_BACKOFF_MS[Math.min(tries, REFETCH_BACKOFF_MS.length) - 1]);
+    const target = attempt > 0 ? bustedUrl(url, attempt) : url;
+    const body = await fetchBody(target, attempt > 0 ? { headers: NO_CACHE } : {});
+    const cut = cutShort(body);
+    if (!cut) return { ...body, url: target };
+    const why = JSON.stringify({ url: target, etag: body.etag, lastModified: body.lastModified ?? null, ...cut });
+    log(`truncated file: ${why}`);
+    if (tries >= retries) throw new TruncatedFile(`${url} is cut short on ${tries + 1} fetches: ${why}`);
+    attempt += 1;
+  }
 }
 
 export async function defaultFetchText(url) {
@@ -106,13 +190,15 @@ export async function defaultFetchStatus(url) {
  * A dated `sec_list` as a snapshot. It carries, not enumerable, what was
  * fetched (`source`): the walk logs it when a file looks wrong.
  */
-export async function fetchSnapshot(date, { fetchText, fetchBody = defaultFetchBody } = {}) {
+export async function fetchSnapshot(date, { fetchText, fetchBody = defaultFetchBody, refetch = 0, sleep, log } = {}) {
   const url = bandFileUrl(date);
-  const { text, contentType = null } = fetchText ? { text: await fetchText(url) } : await fetchBody(url);
+  const { text, contentType = null, etag = null, lastModified = null, url: fetched = url } = fetchText
+    ? { text: await fetchText(url) }
+    : await fetchWhole(url, { fetchBody, refetch, sleep, log });
   const rows = parseSecList(text);
   const snapshot = toSnapshot(rows);
   Object.defineProperty(snapshot, 'source', {
-    value: { url, bytes: Buffer.byteLength(text), rows: rows.length, contentType, head: text.slice(0, 200) },
+    value: { url: fetched, bytes: Buffer.byteLength(text), rows: rows.length, contentType, etag, lastModified, head: text.slice(0, 200) },
     enumerable: false,
   });
   return snapshot;
@@ -126,6 +212,7 @@ export async function fetchSessionExists(date, { fetchStatus = defaultFetchStatu
   throw new Error(`HTTP ${status} for ${url}`);
 }
 
-export async function fetchSymbolChanges({ fetchText = defaultFetchText } = {}) {
-  return parseSymbolChanges(await fetchText(`${BASE}/symbolchange.csv`));
+export async function fetchSymbolChanges({ fetchText, fetchBody = defaultFetchBody, sleep, log } = {}) {
+  const url = `${BASE}/symbolchange.csv`;
+  return parseSymbolChanges(fetchText ? await fetchText(url) : (await fetchWhole(url, { fetchBody, sleep, log })).text);
 }

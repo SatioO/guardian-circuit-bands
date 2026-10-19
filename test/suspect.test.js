@@ -7,11 +7,12 @@ import { join } from 'node:path';
 import { runBackfill } from '../src/backfill.js';
 import { backfillInto } from '../src/cli.js';
 import { SuspectFile, MAX_MOVES_TO_NO_BAND } from '../src/walk.js';
-import { fetchSnapshot as fetchNse, parseSecList, toSnapshot } from '../src/nse.js';
+import { fetchSnapshot as fetchNse, parseSecList, REFETCH_BACKOFF_MS, toSnapshot } from '../src/nse.js';
 import { ymd } from '../src/dates.js';
 import { fetchSnapshot, fixtureFetchers, renames, sessionExists } from './fixtures.js';
 
 const DAY = new Date('2026-10-05T00:00:00Z');
+const FETCHES = REFETCH_BACKOFF_MS.length + 1; // the first, then every re-fetch
 
 test('the real largest move to No Band (sec_list_04092026, 331 ETFs) passes', async () => {
   const { events, lastPub } = await runBackfill({ fetchSnapshot, sessionExists, renames, from: '2026-09-03', today: '2026-09-07' });
@@ -38,21 +39,21 @@ const bodies = (...sixth) => {
 const only = (days) => async (date) => days.includes(ymd(date));
 const sessions = only(['2026-10-05', '2026-10-06']);
 
-test('a phantom file (every banded name to No Band) fails after two re-fetches, logged', async () => {
+test('a phantom file (every banded name to No Band) fails after every re-fetch, logged', async () => {
   const fetch = bodies(PHANTOM);
   let calls = 0;
   const counted = async (date) => { if (ymd(date) === '2026-10-06') calls += 1; return fetch(date); };
   const lines = [];
   await assert.rejects(
     runBackfill({ fetchSnapshot: counted, sessionExists: sessions, renames, from: '2026-10-05', today: '2026-10-06', log: (l) => lines.push(l) }),
-    (err) => err instanceof SuspectFile && /moves 700 banded names to no band \(> 600\) on 3 fetches/.test(err.message),
+    (err) => err instanceof SuspectFile && err.message.includes(`moves 700 banded names to no band (> 600) on ${FETCHES} fetches`),
   );
-  assert.equal(calls, 3, 'fetched, then 2 more times');
-  assert.equal(lines.length, 3);
-  const why = JSON.parse(lines[2].replace(/^suspect sec_list: /, ''));
+  assert.equal(calls, FETCHES, 'fetched, then once per re-fetch');
+  assert.equal(lines.length, FETCHES);
+  const why = JSON.parse(lines[FETCHES - 1].replace(/^suspect sec_list: /, ''));
   assert.deepEqual(
     [why.file, why.attempt, why.movesToNoBand, why.url, why.bytes, why.rows, why.symbols, why.nullBands, why.contentType],
-    ['2026-10-06', 3, 700, 'https://nsearchives.nseindia.com/content/equities/sec_list_06102026.csv', Buffer.byteLength(PHANTOM), 700, 700, 700, 'application/octet-stream'],
+    ['2026-10-06', FETCHES, 700, 'https://nsearchives.nseindia.com/content/equities/sec_list_06102026.csv', Buffer.byteLength(PHANTOM), 700, 700, 700, 'application/octet-stream'],
   );
   assert.equal(why.head, PHANTOM.slice(0, 200));
 });
@@ -66,10 +67,10 @@ test('a phantom on the first fetch and a good file on the retry passes', async (
 // A body cut short: the same file with only its first 50 of 700 rows.
 const SHORT = `${GOOD.split('\n').slice(0, 51).join('\n')}\n`;
 
-test('a body cut short (most banded rows missing) fails after two re-fetches, and a run writes nothing', async () => {
+test('a body cut short (most banded rows missing) fails after every re-fetch, and a run writes nothing', async () => {
   await assert.rejects(
     runBackfill({ fetchSnapshot: bodies(SHORT), sessionExists: sessions, renames, from: '2026-10-05', today: '2026-10-06' }),
-    (err) => err instanceof SuspectFile && /moves 650 banded names to no band \(> 600\) on 3 fetches/.test(err.message),
+    (err) => err instanceof SuspectFile && err.message.includes(`moves 650 banded names to no band (> 600) on ${FETCHES} fetches`),
   );
   const dir = await mkdtemp(join(tmpdir(), 'bands-short-'));
   const fetchers = { ...fixtureFetchers, sessionExists: sessions, snapshot: bodies(SHORT) };
@@ -118,7 +119,7 @@ test('fetchSnapshot says what it fetched', async () => {
   const snap = await fetchNse(DAY, { fetchBody: async () => ({ text: HEAD, contentType: 'text/csv' }) });
   assert.deepEqual(snap.source, {
     url: 'https://nsearchives.nseindia.com/content/equities/sec_list_05102026.csv',
-    bytes: Buffer.byteLength(HEAD), rows: 21, contentType: 'text/csv', head: HEAD.slice(0, 200),
+    bytes: Buffer.byteLength(HEAD), rows: 21, contentType: 'text/csv', etag: null, lastModified: null, head: HEAD.slice(0, 200),
   });
   assert.deepEqual(Object.keys(snap), [], 'not enumerable');
 });
