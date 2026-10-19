@@ -21,8 +21,14 @@ import { rekeyEvents, rekeySnapshot, renameIndex } from './renames.js';
  * - The session test fails closed (`SessionCheckFailed`, nothing written): a
  *   weekday with a `sec_list` but no bhavcopy (a bhavcopy not posted yet
  *   within `recentDays` ends the walk instead), and more than
- *   `maxQuietWeekdays` weekdays in a row without one. NSE has never closed
- *   that long; an archive that stops answering would look like it.
+ *   `maxQuietWeekdays` weekdays in a row without one, counting only weekdays
+ *   older than `recentDays` (a recent one may just not be posted yet). NSE
+ *   has never closed that long; an archive that stops answering would look
+ *   like it. Any other failed request fails the walk.
+ * - It assumes NSE posts its archive in date order: a recent weekday with
+ *   neither file, once a later session is found, was a holiday, and the walk
+ *   moves past it for good. A later session's bhavcopy is never posted before
+ *   an earlier day's.
  */
 export class SessionCheckFailed extends Error {}
 
@@ -62,7 +68,7 @@ export async function walk({
     await pause();
     if (!session) {
       if (!isWeekday(day)) continue;
-      quiet += 1;
+      if (daysApart(day, today) > recentDays) quiet += 1;
       if (quiet > maxQuietWeekdays) {
         throw new SessionCheckFailed(`${quiet} weekdays in a row without a bhavcopy, through ${day}`);
       }
