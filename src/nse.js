@@ -23,9 +23,21 @@ export function sessionFileUrl(date) {
   return `${ARCHIVES}/historical/EQUITIES/${date.getUTCFullYear()}/${mon}/cm${dd}${mon}${date.getUTCFullYear()}bhav.csv.zip`;
 }
 
+const SEC_LIST_COLUMNS = new Map(['Symbol', 'Series', 'Security Name', 'Band', 'Remarks'].map((c) => [c.toLowerCase(), c]));
+
+/**
+ * The rows of a `sec_list` file. A byte-order mark, CRLF or CR line ends,
+ * unquoted fields and header names in any case or padding all read the same:
+ * a header that missed its name would read every band as No Band. Trimming a
+ * header name also drops a leading byte-order mark (U+FEFF is whitespace to
+ * String.prototype.trim).
+ */
 export function parseSecList(text) {
   return parse(text, {
-    columns: true,
+    columns: (header) => header.map((h) => {
+      const name = String(h).trim().replace(/\s+/g, ' ');
+      return SEC_LIST_COLUMNS.get(name.toLowerCase()) ?? name;
+    }),
     skip_empty_lines: true,
     trim: true,
     relax_column_count: true,
@@ -71,11 +83,16 @@ export class FileNotAvailable extends Error {}
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 const HEADERS = { 'User-Agent': UA, 'Referer': 'https://www.nseindia.com/' };
 
-export async function defaultFetchText(url) {
+/** A file's text and what the server said it was. */
+export async function defaultFetchBody(url) {
   const res = await fetch(url, { headers: HEADERS });
   if (res.status === 404) throw new FileNotAvailable(url);
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-  return await res.text();
+  return { text: await res.text(), contentType: res.headers.get('content-type') };
+}
+
+export async function defaultFetchText(url) {
+  return (await defaultFetchBody(url)).text;
 }
 
 /** The status of a one-byte ranged GET (NSE's old archive answers no HEAD). */
@@ -85,9 +102,20 @@ export async function defaultFetchStatus(url) {
   return res.status;
 }
 
-export async function fetchSnapshot(date, { fetchText = defaultFetchText } = {}) {
-  const text = await fetchText(bandFileUrl(date));
-  return toSnapshot(parseSecList(text));
+/**
+ * A dated `sec_list` as a snapshot. It carries, not enumerable, what was
+ * fetched (`source`): the walk logs it when a file looks wrong.
+ */
+export async function fetchSnapshot(date, { fetchText, fetchBody = defaultFetchBody } = {}) {
+  const url = bandFileUrl(date);
+  const { text, contentType = null } = fetchText ? { text: await fetchText(url) } : await fetchBody(url);
+  const rows = parseSecList(text);
+  const snapshot = toSnapshot(rows);
+  Object.defineProperty(snapshot, 'source', {
+    value: { url, bytes: Buffer.byteLength(text), rows: rows.length, contentType, head: text.slice(0, 200) },
+    enumerable: false,
+  });
+  return snapshot;
 }
 
 export async function fetchSessionExists(date, { fetchStatus = defaultFetchStatus } = {}) {
